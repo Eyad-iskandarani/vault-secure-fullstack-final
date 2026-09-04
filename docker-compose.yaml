@@ -3,7 +3,7 @@ services:
     build:
       context: ./database
       dockerfile: Dockerfile
-    image: secure-fullstack-database:latest
+    image: ghcr.io/eyad-iskandarani/vault-secure-fullstack-final-database:latest
     container_name: secure-fullstack-database
     restart: unless-stopped
 
@@ -31,7 +31,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: secure-fullstack-backend:latest
+    image: ghcr.io/eyad-iskandarani/vault-secure-fullstack-final-backend:latest
     container_name: secure-fullstack-backend
     restart: unless-stopped
 
@@ -64,7 +64,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: secure-fullstack-frontend:latest
+    image: ghcr.io/eyad-iskandarani/vault-secure-fullstack-final-frontend:latest
     container_name: secure-fullstack-frontend
     restart: unless-stopped
 
