@@ -11,9 +11,7 @@ venv/
 vault/token
 vault/keys/
 vault/*-init*.json
-vault/data/*
-!vault/data/.gitkeep
-
+vault/data/
 # Security reports generated during scans
 security-reports/*
 !security-reports/.gitkeep
