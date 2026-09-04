@@ -1,0 +1,31 @@
+services:
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: secure-fullstack-vault
+    restart: unless-stopped
+
+    cap_add:
+      - IPC_LOCK
+
+    environment:
+      VAULT_ADDR: "http://127.0.0.1:8200"
+
+    ports:
+      - "8200:8200"
+
+    volumes:
+      - ./config.hcl:/vault/config/config.hcl:ro
+      - ./data:/vault/file
+
+    command:
+      - server
+
+    networks:
+      secure-fullstack-network:
+        aliases:
+          - vault
+
+networks:
+  secure-fullstack-network:
+    name: secure-fullstack-network
+    driver: bridge

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Environment and secrets
+.env
+.env.*
+vault/token
+vault/keys/
+vault/*-init*.json
+vault/data/*
+!vault/data/.gitkeep
+
+# Security reports generated during scans
+security-reports/*
+!security-reports/.gitkeep
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
