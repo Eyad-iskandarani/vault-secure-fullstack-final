@@ -39,37 +39,37 @@ jobs:
 
       - name: Run Hadolint
         run: |
-          : > security-reports/hadolint-report.txt
+          REPORT="security-reports/hadolint-report.txt"
+          : > "${REPORT}"
 
           while IFS= read -r dockerfile; do
-            echo "==================================================" \
-              >> security-reports/hadolint-report.txt
-            echo "File: ${dockerfile}" \
-              >> security-reports/hadolint-report.txt
-            echo "==================================================" \
-              >> security-reports/hadolint-report.txt
+            {
+              echo "=================================================="
+              echo "HADOLINT SCAN: ${dockerfile}"
+              echo "=================================================="
+            } >> "${REPORT}"
 
             docker run --rm -i \
               hadolint/hadolint:latest-debian \
               < "${dockerfile}" \
-              >> security-reports/hadolint-report.txt \
-              2>&1 || true
+              >> "${REPORT}" 2>&1 || true
 
-            echo \
-              >> security-reports/hadolint-report.txt
+            echo >> "${REPORT}"
           done < <(find . -type f -name Dockerfile | sort)
+
+          if [ ! -s "${REPORT}" ]; then
+            echo "Hadolint completed with no findings." > "${REPORT}"
+          fi
 
       - name: Run Bandit
         run: |
           python3 -m venv .security-venv
-          .security-venv/bin/python -m pip install --upgrade pip
-          .security-venv/bin/python -m pip install bandit
 
-          .security-venv/bin/bandit \
-            --recursive backend \
-            --format json \
-            --output security-reports/bandit-report.json \
-            || true
+          .security-venv/bin/python \
+            -m pip install --quiet --upgrade pip
+
+          .security-venv/bin/python \
+            -m pip install --quiet bandit
 
           .security-venv/bin/bandit \
             --recursive backend \
@@ -77,17 +77,25 @@ jobs:
             --output security-reports/bandit-report.txt \
             || true
 
+          if [ ! -s security-reports/bandit-report.txt ]; then
+            echo "Bandit completed with no findings." \
+              > security-reports/bandit-report.txt
+          fi
+
       - name: Run TruffleHog
         run: |
           docker run --rm \
             --volume "${GITHUB_WORKSPACE}:/repository:ro" \
             trufflesecurity/trufflehog:latest \
             git file:///repository \
-            --json \
             --no-update \
-            > security-reports/trufflehog-report.jsonl \
-            2> security-reports/trufflehog-errors.txt \
-            || true
+            > security-reports/trufflehog-report.txt \
+            2>&1 || true
+
+          if [ ! -s security-reports/trufflehog-report.txt ]; then
+            echo "TruffleHog completed with no findings." \
+              > security-reports/trufflehog-report.txt
+          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -102,85 +110,58 @@ jobs:
           docker pull "${BACKEND_IMAGE}"
           docker pull "${FRONTEND_IMAGE}"
 
-      - name: Scan database image with Trivy
+      - name: Run Trivy
         run: |
-          docker run --rm \
-            --volume /var/run/docker.sock:/var/run/docker.sock \
-            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
-            aquasec/trivy:latest \
-            image \
-            --format json \
-            --output /reports/trivy-database-report.json \
-            "${DATABASE_IMAGE}" || true
+          REPORT="security-reports/trivy-report.txt"
+          : > "${REPORT}"
 
-          docker run --rm \
-            --volume /var/run/docker.sock:/var/run/docker.sock \
-            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
-            aquasec/trivy:latest \
-            image \
-            --format table \
-            --output /reports/trivy-database-report.txt \
-            "${DATABASE_IMAGE}" || true
+          scan_image() {
+            IMAGE_NAME="$1"
+            IMAGE_LABEL="$2"
 
-      - name: Scan backend image with Trivy
-        run: |
-          docker run --rm \
-            --volume /var/run/docker.sock:/var/run/docker.sock \
-            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
-            aquasec/trivy:latest \
-            image \
-            --format json \
-            --output /reports/trivy-backend-report.json \
-            "${BACKEND_IMAGE}" || true
+            {
+              echo "=================================================="
+              echo "TRIVY SCAN: ${IMAGE_LABEL}"
+              echo "IMAGE: ${IMAGE_NAME}"
+              echo "=================================================="
+            } >> "${REPORT}"
 
-          docker run --rm \
-            --volume /var/run/docker.sock:/var/run/docker.sock \
-            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
-            aquasec/trivy:latest \
-            image \
-            --format table \
-            --output /reports/trivy-backend-report.txt \
-            "${BACKEND_IMAGE}" || true
+            docker run --rm \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              aquasec/trivy:latest \
+              image \
+              --format table \
+              --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+              "${IMAGE_NAME}" \
+              >> "${REPORT}" 2>&1 || true
 
-      - name: Scan frontend image with Trivy
-        run: |
-          docker run --rm \
-            --volume /var/run/docker.sock:/var/run/docker.sock \
-            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
-            aquasec/trivy:latest \
-            image \
-            --format json \
-            --output /reports/trivy-frontend-report.json \
-            "${FRONTEND_IMAGE}" || true
+            echo >> "${REPORT}"
+          }
 
-          docker run --rm \
-            --volume /var/run/docker.sock:/var/run/docker.sock \
-            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
-            aquasec/trivy:latest \
-            image \
-            --format table \
-            --output /reports/trivy-frontend-report.txt \
-            "${FRONTEND_IMAGE}" || true
+          scan_image "${DATABASE_IMAGE}" "DATABASE"
+          scan_image "${BACKEND_IMAGE}" "BACKEND"
+          scan_image "${FRONTEND_IMAGE}" "FRONTEND"
 
-      - name: Create report summary
+      - name: List final reports
         if: always()
         run: |
-          {
-            echo "Security Scanning Pipeline"
-            echo "Repository: ${GITHUB_REPOSITORY}"
-            echo "Commit: ${GITHUB_SHA}"
-            echo "Run: ${GITHUB_RUN_ID}"
-            echo
-            echo "Generated report files:"
-            find security-reports -maxdepth 1 -type f \
-              -printf '%f\n' | sort
-          } > security-reports/scan-summary.txt
+          echo "The artifact will contain these files:"
+          find security-reports \
+            -maxdepth 1 \
+            -type f \
+            -name "*-report.txt" \
+            -printf '%f\n' \
+            | sort
 
-      - name: Upload security reports
+      - name: Upload four security reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: security-scan-reports-${{ github.run_number }}
-          path: security-reports/
+          path: |
+            security-reports/hadolint-report.txt
+            security-reports/bandit-report.txt
+            security-reports/trufflehog-report.txt
+            security-reports/trivy-report.txt
           if-no-files-found: error
           retention-days: 30
