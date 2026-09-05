@@ -1,0 +1,186 @@
+name: Security Scanning Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  DATABASE_IMAGE: ghcr.io/eyad-iskandarani/vault-secure-fullstack-final-database:latest
+  BACKEND_IMAGE: ghcr.io/eyad-iskandarani/vault-secure-fullstack-final-backend:latest
+  FRONTEND_IMAGE: ghcr.io/eyad-iskandarani/vault-secure-fullstack-final-frontend:latest
+
+jobs:
+  security-scanning:
+    name: Run Four Security Tools
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+
+    steps:
+      - name: Checkout complete Git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare reports directory
+        run: |
+          rm -rf security-reports
+          mkdir -p security-reports
+
+      - name: Run Hadolint
+        run: |
+          : > security-reports/hadolint-report.txt
+
+          while IFS= read -r dockerfile; do
+            echo "==================================================" \
+              >> security-reports/hadolint-report.txt
+            echo "File: ${dockerfile}" \
+              >> security-reports/hadolint-report.txt
+            echo "==================================================" \
+              >> security-reports/hadolint-report.txt
+
+            docker run --rm -i \
+              hadolint/hadolint:latest-debian \
+              < "${dockerfile}" \
+              >> security-reports/hadolint-report.txt \
+              2>&1 || true
+
+            echo \
+              >> security-reports/hadolint-report.txt
+          done < <(find . -type f -name Dockerfile | sort)
+
+      - name: Run Bandit
+        run: |
+          python3 -m venv .security-venv
+          .security-venv/bin/python -m pip install --upgrade pip
+          .security-venv/bin/python -m pip install bandit
+
+          .security-venv/bin/bandit \
+            --recursive backend \
+            --format json \
+            --output security-reports/bandit-report.json \
+            || true
+
+          .security-venv/bin/bandit \
+            --recursive backend \
+            --format txt \
+            --output security-reports/bandit-report.txt \
+            || true
+
+      - name: Run TruffleHog
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/repository:ro" \
+            trufflesecurity/trufflehog:latest \
+            git file:///repository \
+            --json \
+            --no-update \
+            > security-reports/trufflehog-report.jsonl \
+            2> security-reports/trufflehog-errors.txt \
+            || true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull images for Trivy
+        run: |
+          docker pull "${DATABASE_IMAGE}"
+          docker pull "${BACKEND_IMAGE}"
+          docker pull "${FRONTEND_IMAGE}"
+
+      - name: Scan database image with Trivy
+        run: |
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
+            aquasec/trivy:latest \
+            image \
+            --format json \
+            --output /reports/trivy-database-report.json \
+            "${DATABASE_IMAGE}" || true
+
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
+            aquasec/trivy:latest \
+            image \
+            --format table \
+            --output /reports/trivy-database-report.txt \
+            "${DATABASE_IMAGE}" || true
+
+      - name: Scan backend image with Trivy
+        run: |
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
+            aquasec/trivy:latest \
+            image \
+            --format json \
+            --output /reports/trivy-backend-report.json \
+            "${BACKEND_IMAGE}" || true
+
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
+            aquasec/trivy:latest \
+            image \
+            --format table \
+            --output /reports/trivy-backend-report.txt \
+            "${BACKEND_IMAGE}" || true
+
+      - name: Scan frontend image with Trivy
+        run: |
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
+            aquasec/trivy:latest \
+            image \
+            --format json \
+            --output /reports/trivy-frontend-report.json \
+            "${FRONTEND_IMAGE}" || true
+
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${GITHUB_WORKSPACE}/security-reports:/reports" \
+            aquasec/trivy:latest \
+            image \
+            --format table \
+            --output /reports/trivy-frontend-report.txt \
+            "${FRONTEND_IMAGE}" || true
+
+      - name: Create report summary
+        if: always()
+        run: |
+          {
+            echo "Security Scanning Pipeline"
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Run: ${GITHUB_RUN_ID}"
+            echo
+            echo "Generated report files:"
+            find security-reports -maxdepth 1 -type f \
+              -printf '%f\n' | sort
+          } > security-reports/scan-summary.txt
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-reports-${{ github.run_number }}
+          path: security-reports/
+          if-no-files-found: error
+          retention-days: 30
